@@ -997,10 +997,36 @@ button:focus-visible {
 // ============================================
 const CONFIG = {
   API_BASE_URL: location.hostname === 'localhost' ? '/api' : 'https://tnt-v2.api.bonfires.ai',
-  API_KEY: '8n5l-sJnrHjywrTnJ3rJCjo1f1uLyTPYy_yLgq_bf-d',
-  BONFIRE_ID: '698b70002849d936f4259848',
+  // Filled in by loadCredentials(); never hardcode the key here.
+  API_KEY: '',
+  BONFIRE_ID: '',
   NUM_RESULTS: 10,
 };
+
+// Via server.py (localhost) the proxy adds the API key from DELVE_API_KEY and
+// /config.json supplies BONFIRE_ID. Opened anywhere else, both are asked for
+// once and kept in this browser's localStorage.
+let credentialsPromise = null;
+function loadCredentials() {
+  credentialsPromise ??= (async () => {
+    if (location.hostname === 'localhost') {
+      const res = await fetch('/config.json');
+      if (!res.ok) throw new Error('Could not load /config.json. Open this page through server.py.');
+      CONFIG.BONFIRE_ID = (await res.json()).bonfire_id;
+      return;
+    }
+    for (const [field, label] of [['API_KEY', 'Bonfires API key'], ['BONFIRE_ID', 'Bonfire ID']]) {
+      const storageKey = `bonfires_${field.toLowerCase()}`;
+      let value = localStorage.getItem(storageKey);
+      if (!value) {
+        value = (window.prompt(`${label}:`) || '').trim();
+        if (value) localStorage.setItem(storageKey, value);
+      }
+      CONFIG[field] = value;
+    }
+  })().catch(err => { credentialsPromise = null; throw err; });
+  return credentialsPromise;
+}
 
 const RANDOM_PROMPTS = [
   'surprising connections between people',
@@ -1041,11 +1067,12 @@ let isLoading = false;
 // API
 // ============================================
 async function searchDelve(query) {
+  await loadCredentials();
   const response = await fetch(`${CONFIG.API_BASE_URL}/delve`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${CONFIG.API_KEY}`,
+      ...(CONFIG.API_KEY && { 'Authorization': `Bearer ${CONFIG.API_KEY}` }),
     },
     body: JSON.stringify({
       query: query,
