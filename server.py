@@ -5,20 +5,33 @@ Serves static files from this directory on port 8888.
 Proxies any request to /api/* → https://tnt-v2.api.bonfires.ai/*
 This avoids CORS issues entirely since the browser only talks to localhost.
 
+The API key is read from DELVE_API_KEY and added to proxied requests, so it
+never has to appear in the HTML. BONFIRE_ID is handed to the pages via
+/config.json. See .env.example.
+
 Usage:
+    export DELVE_API_KEY=... BONFIRE_ID=...
     python3 server.py
     # Then open http://localhost:8888/pulse.html
 """
 
 import http.server
 import json
+import os
 import socketserver
+import sys
+import urllib.parse
 import urllib.request
 import urllib.error
 from pathlib import Path
 
 PORT = 8888
 API_BASE = "http://localhost:8000"
+API_KEY = os.environ.get("DELVE_API_KEY", "")
+BONFIRE_ID = os.environ.get("BONFIRE_ID", "")
+
+# Only the pages served by this server may use the key-bearing proxy.
+ALLOWED_ORIGINS = {f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"}
 
 
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
@@ -35,8 +48,20 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if self.path.startswith("/api/"):
             self._proxy("GET")
+        elif path == "/config.json":
+            # Non-secret settings for the pages. Never include the API key here.
+            body = json.dumps({"bonfire_id": BONFIRE_ID}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif any(part.startswith(".") for part in path.split("/")):
+            # Don't serve .env, .git, etc.
+            self.send_error(404)
         else:
             super().do_GET()
 
@@ -47,6 +72,13 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def _proxy(self, method):
+        # Browsers always send Origin on cross-origin requests; refuse those so
+        # other websites can't use the key this proxy adds.
+        origin = self.headers.get("Origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            self.send_error(403, "Cross-origin requests are not proxied")
+            return
+
         # /api/delve → https://tnt-v2.api.bonfires.ai/delve
         target = API_BASE + self.path[4:]  # strip "/api"
 
@@ -60,6 +92,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             val = self.headers.get(key)
             if val:
                 headers[key] = val
+        headers.setdefault("Authorization", f"Bearer {API_KEY}")
 
         req = urllib.request.Request(target, data=body, headers=headers, method=method)
 
@@ -87,10 +120,16 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    missing = [name for name, value in (("DELVE_API_KEY", API_KEY), ("BONFIRE_ID", BONFIRE_ID)) if not value]
+    if missing:
+        print(f"\n  Error: {' and '.join(missing)} must be set in the environment (see .env.example).\n", file=sys.stderr)
+        sys.exit(1)
+
     # Kill any existing server on this port
     socketserver.TCPServer.allow_reuse_address = True
 
-    with socketserver.TCPServer(("", PORT), ProxyHandler) as httpd:
+    # Bind to loopback only: the proxy adds the API key to every request.
+    with socketserver.TCPServer(("127.0.0.1", PORT), ProxyHandler) as httpd:
         print(f"\n  Bonfires local server running on http://localhost:{PORT}")
         print(f"  Static files: {Path(__file__).parent}")
         print(f"  API proxy:    /api/* → {API_BASE}/*")

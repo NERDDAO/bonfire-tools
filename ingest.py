@@ -21,10 +21,10 @@ import urllib.request
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Configuration — override with environment variables if needed
+# Configuration — from environment variables (see .env.example)
 # ---------------------------------------------------------------------------
-API_KEY = os.environ.get("DELVE_API_KEY", "8n5l-sJnrHjywrTnJ3rJCjo1f1uLyTPYy_yLgq_bf-d")
-BONFIRE_ID = os.environ.get("BONFIRE_ID", "698b70002849d936f4259848")
+API_KEY = os.environ.get("DELVE_API_KEY", "")
+BONFIRE_ID = os.environ.get("BONFIRE_ID", "")
 BASE_URL = os.environ.get("DELVE_BASE_URL", "https://tnt-v2.api.bonfires.ai")
 
 # ---------------------------------------------------------------------------
@@ -317,6 +317,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    missing = [name for name, value in (("DELVE_API_KEY", API_KEY), ("BONFIRE_ID", BONFIRE_ID)) if not value]
+    if missing and not args.dry_run:
+        print(c(f"  Error: {' and '.join(missing)} must be set in the environment (see .env.example).", RED), file=sys.stderr)
+        sys.exit(1)
 
     print_banner()
 
